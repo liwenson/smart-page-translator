@@ -1,0 +1,19 @@
+# 注释：忽略所有 .log 后缀的文件
+*.log
+
+.idea
+
+# 但保留 important.log（反向忽略）
+!important.log
+
+# 忽略根目录下的 temp 目录（仅根目录）
+/temp/
+
+# 忽略所有层级的 build 目录（比如 src/build、test/build）
+**/build
+
+# 忽略 src 目录下的所有 .txt 文件
+src/*.txt
+
+# 忽略所有以 .env 开头的文件（.env、.env.local 等）
+.env*
