@@ -1,7 +1,7 @@
 # 注释：忽略所有 .log 后缀的文件
 *.log
 
-.idea
+.idea/
 
 # 但保留 important.log（反向忽略）
 !important.log
