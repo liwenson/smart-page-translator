@@ -14,15 +14,9 @@
 
 ### 开发者模式安装
 
-1. 打包插件：
-   ```powershell
-   .\build.ps1
-   ```
-
-2. 打开 Chrome，进入 `chrome://extensions/`
-3. 开启「开发者模式」
-4. 点击「加载已解压的扩展程序」
-5. 选择 `dist` 目录
+1. 打开 Chrome，进入 `chrome://extensions/`
+2. 开启「开发者模式」
+3. 点击「加载已解压的扩展程序」
 
 ## 使用方法
 
@@ -42,12 +36,6 @@ smart-page-translator/
 ├── popup.html        # 弹窗界面
 ├── popup.js          # 弹窗逻辑
 ├── style.css         # 样式
-├── icons/            # 图标
-├── build.ps1         # 打包脚本
-└── dist/             # 打包输出
+└── icons/            # 图标
 ```
 
-## 版本
-
-- v2.1.0 - 优化UI，支持多翻译引擎
-- v2.0 - 初始版本
