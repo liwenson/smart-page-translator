@@ -1,9 +1,7 @@
-// Smart Page Translator - Content Script v3.0
-// 优化版 - 支持多API、智能缓存、进度追踪
+// Smart Page Translator - Content Script
 (function () {
     'use strict';
 
-    // 防止重复注入
     if (window.__sptLoaded) return;
     window.__sptLoaded = true;
 
@@ -26,7 +24,6 @@
         translated: false,
         processing: false,
         targetLang: 'zh-CN',
-        provider: 'viki',
         totalNodes: 0,
         translatedNodes: 0,
     };
@@ -56,6 +53,7 @@
 
     const cache = new LRUCache(CONFIG.CACHE_MAX);
     const originalText = new WeakMap();
+    const translatedNodes = new Set();
 
     // ========== FNV-1a 哈希 ==========
     function hash(str) {
@@ -80,8 +78,25 @@
         return inferLangFromText(sampleText());
     }
 
+    // Collect all text nodes for language detection
+    function collectAllTextNodes(root, sampleLimit = Infinity) {
+        const nodes = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                const text = node.nodeValue?.trim();
+                if (!text) return NodeFilter.FILTER_REJECT;
+                if (isExcludedAncestor(node)) return NodeFilter.FILTER_REJECT;
+                // Do not filter by target language here; used only for detection
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        });
+        let node;
+        while ((node = walker.nextNode()) && nodes.length < sampleLimit) nodes.push(node);
+        return nodes;
+    }
+
     function sampleText() {
-        return collectTextNodes(document.body, 30)
+        return collectAllTextNodes(document.body, 30)
             .map(n => n.nodeValue?.trim()).filter(Boolean).join(' ');
     }
 
@@ -113,8 +128,25 @@
     }
 
     function isAlreadyInTargetLang(text) {
-        if (state.targetLang.startsWith('zh')) return /[\u4e00-\u9fa5]/.test(text);
-        return false;
+        if (!text) return false;
+
+        const meaningfulRe = /[A-Za-z\u00C0-\u024F\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af\u0600-\u06ff\u0400-\u04ff\u0e00-\u0e7f]/g;
+        const meaningfulCount = (text.match(meaningfulRe) || []).length;
+        if (!meaningfulCount) return false;
+
+        const target = (state.targetLang || '').toLowerCase();
+        let targetRe;
+
+        if (target.startsWith('zh')) targetRe = /[\u4e00-\u9fa5]/g;
+        else if (target.startsWith('ja')) targetRe = /[\u3040-\u30ff]/g;
+        else if (target.startsWith('ko')) targetRe = /[\uac00-\ud7af]/g;
+        else if (target.startsWith('ar')) targetRe = /[\u0600-\u06ff]/g;
+        else if (target.startsWith('ru')) targetRe = /[\u0400-\u04ff]/g;
+        else if (target.startsWith('th')) targetRe = /[\u0e00-\u0e7f]/g;
+        else targetRe = /[A-Za-z\u00C0-\u024F]/g;
+
+        const targetCount = (text.match(targetRe) || []).length;
+        return targetCount / meaningfulCount > 0.5;
     }
 
     function isValidText(text) {
@@ -125,6 +157,7 @@
         return true;
     }
 
+    // Collect valid text nodes for translation
     function collectTextNodes(root, sampleLimit = Infinity) {
         const nodes = [];
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -148,17 +181,15 @@
         try {
             return await new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage(
-                    { action: 'translate', texts, provider: state.provider, targetLanguage: state.targetLang },
+                    { action: 'translate', texts, targetLanguage: state.targetLang },
                     res => {
                         if (chrome.runtime.lastError) {
                             const error = chrome.runtime.lastError.message || 'Unknown error';
                             if (retryCount < MAX_RETRIES) {
-                                // 重试
                                 setTimeout(() => {
                                     requestTranslation(texts, retryCount + 1).then(resolve).catch(reject);
                                 }, 500 * (retryCount + 1));
                             } else {
-                                console.error('[Content] Background unavailable after retries:', error);
                                 reject(new Error('翻译服务不可用'));
                             }
                             return;
@@ -172,7 +203,6 @@
                 );
             });
         } catch (e) {
-            console.error('[Content] Translation request failed:', e);
             throw e;
         }
     }
@@ -201,7 +231,6 @@
         try {
             translations = await requestTranslation(missTexts);
         } catch (e) {
-            console.error('[Content] Translation failed:', e.message);
             translations = missTexts;
         }
 
@@ -230,17 +259,19 @@
             try {
                 translated = await translateBatch(texts);
             } catch (e) {
-                console.error('[Content] Batch error:', e);
                 continue;
             }
 
             batch.forEach((node, j) => {
-                if (!originalText.has(node)) originalText.set(node, node.nodeValue);
+                if (!originalText.has(node)) {
+                    originalText.set(node, node.nodeValue);
+                    translatedNodes.add(node);
+                }
                 node.nodeValue = translated[j] ?? node.nodeValue;
                 state.translatedNodes++;
             });
 
-            // 批次间让出主线程
+            // Yield to main thread between batches
             if (i + BATCH < nodes.length) await new Promise(r => setTimeout(r, 30));
         }
     }
@@ -248,6 +279,7 @@
     // ========== DOM 监听 ==========
     let observer = null;
     let pendingNodes = [];
+    let pendingSet = new Set();
     let debounceTimer = null;
     let scrollTimer = null;
     let periodicTimer = null;
@@ -258,51 +290,64 @@
             if (!pendingNodes.length || state.processing) return;
             state.processing = true;
             try {
-                await processNodes(pendingNodes.splice(0));
+                const toProcess = pendingNodes.splice(0);
+                // clear corresponding IDs from pendingSet
+                toProcess.forEach(n => pendingSet.delete(n));
+                await processNodes(toProcess);
             } finally {
                 state.processing = false;
             }
         }, CONFIG.DEBOUNCE_MS);
     }
 
-    // 收集待翻译节点
+    // Collect pending translation nodes
     function collectPendingNodes() {
         const nodes = collectTextNodes(document.body);
-        // 过滤出未翻译的节点
-        const untranslated = nodes.filter(n => {
+        const untranslated = [];
+        for (const n of nodes) {
             const orig = originalText.get(n);
-            return orig === undefined || orig === n.nodeValue;
-        });
+            const isUntranslated = orig === undefined || orig === n.nodeValue;
+            if (isUntranslated && !pendingSet.has(n) && !translatedNodes.has(n)) {
+                untranslated.push(n);
+            }
+        }
         return untranslated;
     }
 
-    // 滚动时触发翻译
+    // Trigger translation on scroll
     function onScroll() {
         if (scrollTimer) return;
         scrollTimer = setTimeout(() => {
             scrollTimer = null;
             if (!state.translated) return;
             
-            // 收集可见区域内的未翻译节点
             const nodes = collectPendingNodes();
             if (nodes.length > 0) {
-                pendingNodes.push(...nodes);
+                nodes.forEach(n => {
+                    if (!pendingSet.has(n)) {
+                        pendingNodes.push(n);
+                        pendingSet.add(n);
+                    }
+                });
                 if (!state.processing) scheduleProcess();
             }
         }, 200);
     }
 
-    // 定期检查未翻译内容（处理懒加载）
+    // Periodic check for lazy-loaded content
     function startPeriodicCheck() {
         if (periodicTimer) return;
-        // 每3秒检查一次页面是否有未翻译的内容
         periodicTimer = setInterval(() => {
             if (!state.translated) return;
             
             const nodes = collectPendingNodes();
             if (nodes.length > 0) {
-                console.log(`[SPT] Found ${nodes.length} untranslated nodes, processing...`);
-                pendingNodes.push(...nodes);
+                nodes.forEach(n => {
+                    if (!pendingSet.has(n)) {
+                        pendingNodes.push(n);
+                        pendingSet.add(n);
+                    }
+                });
                 if (!state.processing) scheduleProcess();
             }
         }, 3000);
@@ -311,12 +356,17 @@
     function startObserver() {
         if (observer) return;
         
-        // MutationObserver 监听 DOM 变化
         observer = new MutationObserver(mutations => {
             mutations.forEach(m => {
                 m.addedNodes.forEach(node => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        pendingNodes.push(...collectTextNodes(node));
+                        const newNodes = collectTextNodes(node);
+                        newNodes.forEach(n => {
+                            if (!pendingSet.has(n) && !translatedNodes.has(n)) {
+                                pendingNodes.push(n);
+                                pendingSet.add(n);
+                            }
+                        });
                     }
                 });
             });
@@ -324,10 +374,7 @@
         });
         observer.observe(document.body, { childList: true, subtree: true });
         
-        // 监听滚动事件（处理懒加载）
         window.addEventListener('scroll', onScroll, { passive: true });
-        
-        // 启动定期检查
         startPeriodicCheck();
     }
 
@@ -347,15 +394,16 @@
         window.removeEventListener('scroll', onScroll);
     }
 
-    // ========== 主流程 ==========
+    // Main translation flow
     async function startTranslation() {
-        if (state.translated || state.processing) return;
+        if (state.translated || state.processing) {
+            return;
+        }
         state.processing = true;
         
         try {
             const nodes = collectTextNodes(document.body);
             if (!nodes.length) {
-                console.info('[SPT] No translatable text');
                 return;
             }
             await processNodes(nodes);
@@ -366,19 +414,20 @@
         }
     }
 
-    // ========== 恢复 ==========
+    // Restore original text
     function restorePage() {
         if (!state.translated) return;
 
-        // 停止所有监听器
         stopObserver();
         clearTimeout(debounceTimer);
         pendingNodes = [];
+        pendingSet.clear();
 
-        collectTextNodes(document.body).forEach(node => {
+        translatedNodes.forEach(node => {
             const orig = originalText.get(node);
             if (orig !== undefined) node.nodeValue = orig;
         });
+        translatedNodes.clear();
 
         cache.clear();
         state.translated = false;
@@ -396,7 +445,6 @@
 
             case 'translate':
                 if (msg.targetLanguage) state.targetLang = msg.targetLanguage;
-                if (msg.provider) state.provider = msg.provider;
                 startTranslation()
                     .then(() => sendResponse({ ok: true }))
                     .catch(() => sendResponse({ ok: false }));
@@ -425,13 +473,8 @@
                 state.targetLang = msg.language;
                 sendResponse({ ok: true });
                 break;
-
-            case 'setProvider':
-                state.provider = msg.provider;
-                sendResponse({ ok: true });
-                break;
         }
     });
 
-    console.log('[SPT] Content script v3.0 loaded');
+    console.log('[SPT] Content script v4.1 loaded');
 })();

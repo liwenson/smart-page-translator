@@ -1,71 +1,71 @@
-// Smart Page Translator - Popup v2.1
 'use strict';
-
-// ========== 语言 / 引擎配置 ==========
-const LANGUAGES = {
-    'zh-CN': '简体中文', 'zh-TW': '繁体中文', 'en': 'English',
-    'ja': '日本語', 'ko': '한국어', 'fr': 'Français',
-    'de': 'Deutsch', 'es': 'Español', 'pt': 'Português',
-    'ru': 'Русский', 'ar': 'العربية', 'it': 'Italiano',
-    'th': 'ไทย', 'vi': 'Tiếng Việt', 'id': 'Bahasa Indonesia',
-    'ms': 'Bahasa Melayu', 'hi': 'हिन्दी', 'tr': 'Türkçe',
-    'pl': 'Polski', 'nl': 'Nederlands', 'sv': 'Svenska',
-};
-
-const LANG_DISPLAY = {
-    zh: '中文', en: '英文', ja: '日文', ko: '韩文',
-    fr: '法文', de: '德文', es: '西班牙文', ru: '俄文',
-    ar: '阿拉伯文', th: '泰文', vi: '越南文', id: '印尼文',
-    hi: '印地文', tr: '土耳其文', unknown: '未知',
-};
-
-// 仅保留两个可用引擎
-const VALID_PROVIDERS = new Set(['viki', 'bing']);
-
-const DEFAULTS = {
-    autoTranslate: false,
-    translatorProvider: 'viki',
-    targetLanguage: 'zh-CN',
-};
 
 // ========== DOM 引用 ==========
 const el = id => document.getElementById(id);
 const dom = {
-    statusIcon: el('statusIcon'),
-    statusText: el('statusText'),
-    detectedLang: el('detectedLang'),
-    translateBtn: el('translateBtn'),
-    restoreBtn: el('restoreBtn'),
+    actionBtn: el('actionBtn'),
     targetLang: el('targetLanguage'),
     provider: el('translatorProvider'),
-    autoTranslate: el('autoTranslate'),
+    statusText: el('statusText'), // 新增状态提示
+};
+
+// ========== 配置 ==========
+const DEFAULTS = {
+    targetLanguage: 'zh-CN',
+    provider: 'edge',
 };
 
 // ========== 状态 ==========
-const STATUS = {
-    idle:        { cls: '',           text: '等待操作' },
-    detecting:   { cls: 'detecting', text: '检测语言...' },
-    translating: { cls: 'translating', text: '翻译中...' },
-    translated:  { cls: 'translated', text: '翻译完成' },
-    restoring:   { cls: '',           text: '恢复中...' },
-    error:       { cls: 'error',      text: '发生错误，请重试' },
-};
+let isTranslated = false;
+let isTranslating = false;
+let translateTimer = null;
 
-function setStatus(key) {
-    const s = STATUS[key] ?? STATUS.idle;
-    dom.statusIcon.className = 'status-icon ' + s.cls;
-    dom.statusText.textContent = s.text;
+// ========== UI 更新 ==========
+function updateUI() {
+    const btn = dom.actionBtn;
+    const status = dom.statusText;
+
+    // 更新按钮状态
+    if (isTranslating) {
+        btn.textContent = '翻译中...';
+        btn.disabled = true;
+        btn.className = 'btn btn-primary';
+        status.textContent = '正在处理，请稍候';
+    } else if (isTranslated) {
+        btn.textContent = '恢复原文';
+        btn.disabled = false;
+        btn.className = 'btn btn-secondary';
+        status.textContent = '已翻译为 ' + getLangName(dom.targetLang.value);
+    } else {
+        btn.textContent = '翻译此页面';
+        btn.disabled = false;
+        btn.className = 'btn btn-primary';
+        status.textContent = ''; // 清空状态
+    }
 }
 
-function setButtons({ translating = false, translated = false } = {}) {
-    dom.translateBtn.disabled = translating || translated;
-    dom.restoreBtn.disabled   = translating || !translated;
+// 辅助：语言代码转中文名称
+function getLangName(code) {
+    const langMap = {
+        'zh-CN': '中文(简体)',
+        'zh-TW': '中文(繁體)',
+        'en': '英语',
+        'ja': '日语',
+        'ko': '韩语',
+        'fr': '法语',
+        'de': '德语',
+        'es': '西班牙语',
+        'ru': '俄语',
+        'pt': '葡萄牙语',
+        'it': '意大利语',
+    };
+    return langMap[code] || code;
 }
 
-// ========== Tab / 注入 ==========
+// ========== 通信 ==========
 async function getActiveTab() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tab ?? null;
+    return tab;
 }
 
 async function ensureContentScript(tabId) {
@@ -73,18 +73,16 @@ async function ensureContentScript(tabId) {
         await chrome.tabs.sendMessage(tabId, { action: 'ping' });
     } catch {
         await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 100));
     }
 }
 
-// 确保 background service worker 已启动
 async function ensureBackground() {
     try {
         await chrome.runtime.sendMessage({ action: 'ping' });
         return true;
-    } catch (e) {
-        console.warn('[Popup] Background not ready, waiting...');
-        await new Promise(r => setTimeout(r, 1000));
+    } catch {
+        await new Promise(r => setTimeout(r, 500));
         try {
             await chrome.runtime.sendMessage({ action: 'ping' });
             return true;
@@ -97,117 +95,118 @@ async function ensureBackground() {
 async function sendToContent(action, data = {}) {
     const tab = await getActiveTab();
     if (!tab?.id) return null;
-    
-    // 先确保 background 可用
-    const bgReady = await ensureBackground();
-    if (!bgReady) {
-        console.error('[Popup] Background service worker not available');
-    }
-    
+
+    if (!await ensureBackground()) return null;
+
     try {
         await ensureContentScript(tab.id);
         return await chrome.tabs.sendMessage(tab.id, { action, ...data });
-    } catch (e) {
-        console.warn('[Popup] sendToContent failed:', action, e.message);
+    } catch {
         return null;
     }
 }
 
-// ========== 设置持久化 ==========
+// ========== 设置 ==========
 async function loadSettings() {
     const saved = await chrome.storage.local.get(Object.keys(DEFAULTS));
     const cfg = { ...DEFAULTS, ...saved };
-
-    // 兼容旧版本：如果存储了已删除的引擎，重置为默认值
-    if (!VALID_PROVIDERS.has(cfg.translatorProvider)) {
-        cfg.translatorProvider = DEFAULTS.translatorProvider;
-    }
-
-    dom.autoTranslate.checked = cfg.autoTranslate;
-    dom.provider.value        = cfg.translatorProvider;
-    dom.targetLang.value      = cfg.targetLanguage;
+    dom.targetLang.value = cfg.targetLanguage || 'zh-CN';
+    dom.provider.value = cfg.provider || 'edge';
     return cfg;
 }
 
 function saveSettings() {
-    const provider = VALID_PROVIDERS.has(dom.provider.value)
-        ? dom.provider.value
-        : DEFAULTS.translatorProvider;
-
     chrome.storage.local.set({
-        autoTranslate:      dom.autoTranslate.checked,
-        translatorProvider: provider,
-        targetLanguage:     dom.targetLang.value,
+        targetLanguage: dom.targetLang.value,
+        provider: dom.provider.value,
     });
 }
 
 // ========== 操作 ==========
 async function doTranslate() {
-    setStatus('translating');
-    setButtons({ translating: true });
+    const status = await sendToContent('getStatus');
+    if (status?.isProcessing || status?.isTranslated) return;
+
+    isTranslating = true;
+    updateUI();
 
     const res = await sendToContent('translate', {
-        provider:       dom.provider.value,
         targetLanguage: dom.targetLang.value,
+        provider: dom.provider.value,
     });
 
     if (res?.ok === false) {
-        setStatus('error');
-        setButtons({ translated: false });
+        dom.statusText.textContent = '翻译失败，请重试';
+        isTranslating = false;
+        updateUI();
     } else {
-        setStatus('translated');
-        setButtons({ translated: true });
+        startPolling();
     }
 }
 
 async function doRestore() {
-    setStatus('restoring');
-    setButtons({ translating: true });
+    isTranslating = true;
+    updateUI();
+
     await sendToContent('restore');
-    setStatus('idle');
-    setButtons({ translated: false });
+
+    isTranslated = false;
+    isTranslating = false;
+    updateUI();
+}
+
+function startPolling() {
+    if (translateTimer) return;
+
+    translateTimer = setInterval(async () => {
+        const status = await sendToContent('getStatus');
+        if (!status) return;
+
+        if (status.isTranslated) {
+            clearInterval(translateTimer);
+            translateTimer = null;
+            isTranslating = false;
+            isTranslated = true;
+            updateUI();
+        } else if (!status.isProcessing) {
+            clearInterval(translateTimer);
+            translateTimer = null;
+            isTranslating = false;
+            dom.statusText.textContent = '翻译已停止';
+            updateUI();
+        }
+    }, 300);
 }
 
 // ========== 初始化 ==========
 async function init() {
-    // 填充语言下拉
-    const frag = document.createDocumentFragment();
-    Object.entries(LANGUAGES).forEach(([code, name]) => {
-        frag.appendChild(new Option(name, code));
-    });
-    dom.targetLang.appendChild(frag);
-
-    // 读取设置
-    const cfg = await loadSettings();
-
-    // 检测页面语言
-    setStatus('detecting');
-    const langRes = await sendToContent('detectLanguage');
-    const lang = langRes?.language ?? 'unknown';
-    dom.detectedLang.textContent = LANG_DISPLAY[lang] ?? lang.toUpperCase();
-
-    // 查询当前翻译状态
+    await loadSettings();
     const status = await sendToContent('getStatus');
+
     if (status?.isTranslated) {
-        setStatus('translated');
-        setButtons({ translated: true });
-        return;
+        isTranslated = true;
+    } else if (status?.isProcessing) {
+        isTranslating = true;
+        startPolling();
     }
 
-    // 自动翻译（非中文页面）
-    if (cfg.autoTranslate && lang !== 'zh' && lang !== 'unknown') {
-        await doTranslate();
-    } else {
-        setStatus('idle');
-        setButtons({ translated: false });
-    }
+    updateUI();
 }
 
-// ========== 事件绑定 ==========
-dom.translateBtn.addEventListener('click', doTranslate);
-dom.restoreBtn.addEventListener('click', doRestore);
-[dom.autoTranslate, dom.provider, dom.targetLang].forEach(e =>
-    e.addEventListener('change', saveSettings)
-);
+// ========== 事件 ==========
+dom.actionBtn.addEventListener('click', () => {
+    if (isTranslated) {
+        doRestore();
+    } else if (!isTranslating) {
+        doTranslate();
+    }
+});
+
+dom.targetLang.addEventListener('change', () => {
+    saveSettings();
+    if (isTranslated) updateUI(); // 翻译后切换语言，更新状态提示
+});
+
+dom.provider.addEventListener('change', saveSettings);
 
 init();
