@@ -1,0 +1,22 @@
+{
+  "name": "smart-page-translator",
+  "version": "2.1.0",
+  "description": "智能页面翻译",
+  "main": "background.js",
+  "devDependencies": {
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.smart.translator",
+    "productName": "智能页面翻译",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "win": {
+      "target": ["crx"]
+    }
+  }
+}

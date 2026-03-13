@@ -3,6 +3,7 @@
 
 .idea/
 
+node_modules/
 
 # 但保留 important.log（反向忽略）
 !important.log
