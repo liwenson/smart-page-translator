@@ -1,0 +1,96 @@
+/* Smart Page Translator - Popup Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    width: 240px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #ffffff;
+}
+
+.container {
+    width: 240px;
+    padding: 16px;
+    background: #ffffff;
+}
+
+/* 选择器行 */
+.select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+/* 标签 */
+.select-label {
+    font-size: 12px;
+    color: #5f6368;
+    width: 50px;
+}
+
+/* 下拉框 */
+.select {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid #dadce0;
+    border-radius: 4px;
+    font-size: 12px;
+    outline: none;
+    background: #f8f9fa;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+
+.select:focus {
+    border-color: #1a73e8;
+}
+
+/* 按钮 */
+.btn {
+    width: 100%;
+    padding: 8px 0;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+/* 主按钮（翻译） */
+.btn-primary {
+    background: #1a73e8;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #1557b0;
+}
+
+.btn-primary:disabled {
+    background: #dadce0;
+    cursor: not-allowed;
+}
+
+/* 次要按钮（恢复） */
+.btn-secondary {
+    background: #f1f3f4;
+    color: #202124;
+}
+
+.btn-secondary:hover {
+    background: #e8eaed;
+}
+
+/* 状态提示 */
+.status {
+    font-size: 11px;
+    color: #5f6368;
+    text-align: center;
+    margin-top: 8px;
+}
