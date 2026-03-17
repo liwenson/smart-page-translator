@@ -36,6 +36,7 @@ smart-page-translator/
 ├── popup.html        # 弹窗界面
 ├── popup.js          # 弹窗逻辑
 ├── style.css         # 样式
-└── icons/            # 图标
+├── icons/            # 图标 (16/32/48/128px)
+├── .gitignore         # Git忽略配置
+└── README.md          # 项目文档
 ```
-
